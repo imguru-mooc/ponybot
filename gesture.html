@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>포니봇 손 제스처 제어 (MediaPipe + Web Bluetooth)</title>
+<style>
+  :root{ --navy:#1f3864; --blue:#2563eb; --teal:#0e9e92; --amber:#e08a1e;
+         --green:#2e7d46; --red:#c0463b; --purple:#6d45c0; --ink:#1f2937; --muted:#6b7280; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:"맑은 고딕","Malgun Gothic",system-ui,sans-serif;
+        background:#f5f7fa; color:var(--ink); padding:20px; }
+  .wrap{ max-width:620px; margin:0 auto; }
+  h1{ color:var(--navy); font-size:22px; margin:0 0 4px; }
+  .sub{ color:var(--muted); font-size:14px; margin:0 0 16px; }
+  .card{ background:#fff; border:1px solid #e7ecf2; border-radius:14px; padding:16px; margin-bottom:14px; }
+  #status{ background:#eef3fe; border:1px solid var(--blue); color:var(--navy);
+           border-radius:10px; padding:11px 13px; font-weight:bold; font-size:14px; }
+  .row{ display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
+  button{ font-family:inherit; font-size:15px; font-weight:bold; border:none; border-radius:10px;
+          padding:12px 16px; cursor:pointer; color:#fff; }
+  button:disabled{ opacity:.45; cursor:not-allowed; }
+  #btnConnect{ background:var(--blue); }
+  #btnCam{ background:var(--purple); font-size:17px; padding:14px; width:100%; }
+  #btnCam.on{ background:var(--red); }
+  .dirs button{ background:#fff; color:var(--navy); border:1px solid #d8dee8; flex:1; min-width:84px; }
+  .view{ position:relative; width:100%; aspect-ratio:4/3; background:#000; border-radius:12px;
+         overflow:hidden; transform:scaleX(-1); }   /* 거울 모드 */
+  video,canvas{ position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  .read{ display:flex; align-items:center; gap:16px; margin-top:12px; }
+  #count{ font-size:46px; font-weight:800; color:var(--purple); min-width:60px; text-align:center; }
+  #cmd{ font-size:22px; font-weight:800; color:var(--teal); }
+  .legend{ font-size:14px; line-height:2; }
+  .legend b{ color:var(--navy); }
+  .hint{ font-size:12.5px; color:var(--muted); line-height:1.6; }
+  code{ background:#eef1f6; padding:1px 6px; border-radius:5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>✋ 포니봇 손 제스처 제어</h1>
+  <p class="sub">카메라에 손가락을 펴면 그 개수에 따라 포니봇이 움직입니다.</p>
+
+  <div class="card">
+    <div id="status">초기화 중...</div>
+    <div class="row">
+      <button id="btnConnect">① 포니봇 연결</button>
+      <button id="btnCam" disabled>② 카메라 시작</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="view"><video id="video" playsinline muted></video><canvas id="canvas"></canvas></div>
+    <div class="read">
+      <div id="count">–</div>
+      <div>
+        <div style="font-size:12px;color:#6b7280;">손가락 개수 → 명령</div>
+        <div id="cmd">대기</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="legend">
+      ☝️ <b>1개</b> → 전진 &nbsp;|&nbsp; ✌️ <b>2개</b> → 후진 &nbsp;|&nbsp; <b>3개</b> → 좌회전<br>
+      <b>4개</b> → 우회전 &nbsp;|&nbsp; ✊ <b>주먹(0개)</b> 또는 <b>손 치우기</b> → 정지
+    </div>
+  </div>
+
+  <div class="card">
+    <div style="font-size:13px;font-weight:bold;color:#6b7280;margin-bottom:4px;">수동 테스트 (연결 확인용)</div>
+    <div class="row dirs">
+      <button data-cmd="forward">전진</button>
+      <button data-cmd="left">좌회전</button>
+      <button data-cmd="stop">정지</button>
+      <button data-cmd="right">우회전</button>
+      <button data-cmd="backward">후진</button>
+    </div>
+  </div>
+
+  <p class="hint">
+    ※ <b>Chrome / Edge</b> + <b>HTTPS 주소</b>(예: GitHub Pages)에서 실행하세요. 카메라·블루투스 권한을 허용해야 합니다.<br>
+    ※ <b>손바닥을 카메라로 향하고, 손가락을 위로</b> 펴면 인식이 잘 됩니다. 한 손만 인식합니다.<br>
+    ※ 명령은 같은 손모양이 잠깐 유지될 때 한 번 전송됩니다(떨림 방지).
+  </p>
+</div>
+
+<!-- MediaPipe Hands -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script>
+// ── 포니봇 BLE UUID (ble_library.py의 Nordic UART 서비스와 일치) ──
+const NUS_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const NUS_RX      = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';   // 쓰기(중앙→포니봇)
+
+const $ = id => document.getElementById(id);
+const setStatus = m => { $('status').textContent = m; };
+
+let rxChar = null, camera = null, running = false;
+const video  = $('video');
+const canvas = $('canvas');
+const ctx    = canvas.getContext('2d');
+
+// ── 1) Web Bluetooth 연결 ──
+$('btnConnect').onclick = async () => {
+  if(!navigator.bluetooth){ setStatus('이 브라우저는 Web Bluetooth 미지원 (Chrome/Edge 사용)'); return; }
+  try{
+    const device  = await navigator.bluetooth.requestDevice({
+      filters: [{ name: 'ESP-000' }], optionalServices: [NUS_SERVICE] });
+    setStatus('연결 중...');
+    const server  = await device.gatt.connect();
+    const service = await server.getPrimaryService(NUS_SERVICE);
+    rxChar = await service.getCharacteristic(NUS_RX);
+    device.addEventListener('gattserverdisconnected', () => {
+      rxChar = null; setStatus('⚠️ 포니봇 연결 끊김'); });
+    setStatus('✅ 포니봇(ESP-000) 연결됨! ② 카메라 시작을 누르세요.');
+  }catch(e){ setStatus('연결 실패: ' + e.message); }
+};
+
+// ── 2) 명령 전송 ──
+async function sendCommand(cmd){
+  $('cmd').textContent = cmd;
+  if(!rxChar) return;
+  try{
+    const data = new TextEncoder().encode(cmd);
+    if(rxChar.writeValueWithoutResponse) await rxChar.writeValueWithoutResponse(data);
+    else await rxChar.writeValue(data);
+  }catch(e){ setStatus('전송 실패: ' + e.message); }
+}
+document.querySelectorAll('[data-cmd]').forEach(b => b.onclick = () => sendCommand(b.dataset.cmd));
+
+// ── 3) MediaPipe Hands 준비 ──
+const hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+hands.setOptions({ maxNumHands:1, modelComplexity:0, minDetectionConfidence:0.6, minTrackingConfidence:0.5 });
+hands.onResults(onResults);
+
+// 펴진 손가락 개수 (검지·중지·약지·새끼: 손가락이 위를 향할 때 tip.y < pip.y)
+function countFingers(lm){
+  const pairs = [[8,6],[12,10],[16,14],[20,18]];
+  let c = 0;
+  for(const [tip,pip] of pairs){ if(lm[tip].y < lm[pip].y) c++; }
+  return c;
+}
+// 개수 → 명령 (0개·손없음 = 정지: 안전)
+function cmdFor(count){
+  if(count === 1) return 'forward';
+  if(count === 2) return 'backward';
+  if(count === 3) return 'left';
+  if(count === 4) return 'right';
+  return 'stop';
+}
+
+const STABLE = 7;             // 같은 손모양이 7프레임 유지되면 전송
+let candidate = '', frames = 0, sent = '';
+
+function onResults(res){
+  // 화면 그리기
+  canvas.width  = res.image.width;
+  canvas.height = res.image.height;
+  ctx.save(); ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height);
+
+  let count = -1;
+  if(res.multiHandLandmarks && res.multiHandLandmarks.length){
+    const lm = res.multiHandLandmarks[0];
+    if(window.drawConnectors) drawConnectors(ctx, lm, HAND_CONNECTIONS, {color:'#6d45c0', lineWidth:3});
+    if(window.drawLandmarks)  drawLandmarks(ctx, lm, {color:'#e08a1e', lineWidth:1, radius:3});
+    count = countFingers(lm);
+  }
+  ctx.restore();
+
+  $('count').textContent = (count < 0 ? '✊?' : count);
+
+  // 안정화 후 명령 전송
+  const cmd = cmdFor(count);
+  if(cmd === candidate) frames++; else { candidate = cmd; frames = 1; }
+  if(frames === STABLE && cmd !== sent){
+    sent = cmd;
+    sendCommand(cmd);
+    setStatus('제스처 인식 중 — 최근 명령: ' + cmd);
+  }
+}
+
+// ── 4) 카메라 시작/중지 ──
+$('btnCam').onclick = async () => {
+  if(running){ stopCam(); return; }
+  if(!window.isSecureContext || !navigator.mediaDevices){
+    setStatus('🔒 카메라는 HTTPS(보안 연결)에서만 됩니다. https 주소로 열어주세요.'); return;
+  }
+  try{
+    camera = new Camera(video, {
+      onFrame: async () => { await hands.send({ image: video }); },
+      width: 480, height: 360, facingMode: 'user'
+    });
+    await camera.start();
+    running = true;
+    $('btnCam').classList.add('on'); $('btnCam').textContent = '■ 카메라 중지';
+    setStatus('📷 손을 카메라에 보여주세요. 손가락 개수로 명령합니다.');
+  }catch(e){
+    setStatus('카메라 시작 실패: ' + (e.message || e) + ' (권한·HTTPS 확인)');
+  }
+};
+
+function stopCam(){
+  running = false;
+  if(camera){ camera.stop(); camera = null; }
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  $('btnCam').classList.remove('on'); $('btnCam').textContent = '② 카메라 시작';
+  $('count').textContent = '–'; $('cmd').textContent = '대기';
+  setStatus('카메라 중지됨.');
+  if(rxChar) sendCommand('stop');   // 안전: 멈춤
+}
+
+setStatus('준비 완료! ① 포니봇 연결 → ② 카메라 시작');
+$('btnCam').disabled = false;
+</script>
+</body>
+</html>

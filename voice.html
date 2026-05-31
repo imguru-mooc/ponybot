@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>포니봇 음성 제어 (Web Speech API + Web Bluetooth)</title>
+<style>
+  :root{ --navy:#1f3864; --blue:#2563eb; --teal:#0e9e92; --amber:#e08a1e;
+         --green:#2e7d46; --red:#c0463b; --purple:#6d45c0; --ink:#1f2937; --muted:#6b7280; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:"맑은 고딕","Malgun Gothic",system-ui,sans-serif;
+        background:#f5f7fa; color:var(--ink); padding:24px; }
+  .wrap{ max-width:680px; margin:0 auto; }
+  h1{ color:var(--navy); font-size:24px; margin:0 0 4px; }
+  .sub{ color:var(--muted); font-size:14px; margin:0 0 18px; }
+  .card{ background:#fff; border:1px solid #e7ecf2; border-radius:14px; padding:18px; margin-bottom:16px; }
+  #status{ background:#eef3fe; border:1px solid var(--blue); color:var(--navy);
+           border-radius:10px; padding:12px 14px; font-weight:bold; font-size:14px; }
+  .row{ display:flex; gap:10px; flex-wrap:wrap; margin-top:6px; }
+  button{ font-family:inherit; font-size:15px; font-weight:bold; border:none; border-radius:10px;
+          padding:12px 16px; cursor:pointer; color:#fff; }
+  button:disabled{ opacity:.45; cursor:not-allowed; }
+  #btnConnect{ background:var(--blue); }
+  #btnTalk{ background:var(--teal); font-size:18px; padding:16px; width:100%; }
+  #btnTalk.rec{ background:var(--red); }
+  .dirs button{ background:#fff; color:var(--navy); border:1px solid #d8dee8; flex:1; min-width:90px; }
+  .label{ font-size:13px; font-weight:bold; color:var(--muted); margin:14px 0 6px; }
+  #text{ background:#f5f7fa; border:1px solid #d8dee8; border-radius:10px; padding:12px;
+         min-height:42px; font-size:16px; }
+  #cmd{ font-size:15px; color:var(--teal); font-weight:bold; margin-top:8px; }
+  .hint{ font-size:12.5px; color:var(--muted); line-height:1.6; }
+  code{ background:#eef1f6; padding:1px 6px; border-radius:5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎙️ 포니봇 음성 제어 <span style="font-size:13px;color:#6b7280;">(Web Speech API)</span></h1>
+  <p class="sub">브라우저 내장 음성 인식으로 한국어를 실시간 인식 → Web Bluetooth로 포니봇 제어 (모델 다운로드 없음)</p>
+
+  <div class="card">
+    <div id="status">초기화 중...</div>
+    <div class="row" style="margin-top:12px;">
+      <button id="btnConnect">① 포니봇 연결</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <button id="btnTalk">② 🎙️ 듣기 시작</button>
+    <div class="label">인식 결과</div>
+    <div id="text">—</div>
+    <div id="cmd">명령: —</div>
+  </div>
+
+  <div class="card">
+    <div class="label">수동 테스트 (블루투스 연결 확인용)</div>
+    <div class="row dirs">
+      <button data-cmd="forward">전진</button>
+      <button data-cmd="left">좌회전</button>
+      <button data-cmd="stop">정지</button>
+      <button data-cmd="right">우회전</button>
+      <button data-cmd="backward">후진</button>
+    </div>
+  </div>
+
+  <p class="hint">
+    ※ <b>Chrome / Edge</b>(안드로이드 Chrome 포함)에서 <b>HTTPS 주소</b>로 여세요. iOS Safari는 미지원입니다.<br>
+    ※ Web Speech API는 <b>인터넷 연결</b>이 필요합니다(구글 음성 엔진 사용). 처음 시작할 때 마이크 권한을 허용하세요.<br>
+    ※ ② 듣기 시작을 누르면 계속 듣습니다. 인식 말: “전진 / 후진 / 왼쪽(좌회전) / 오른쪽(우회전) / 정지(멈춰)”.
+  </p>
+</div>
+
+<script>
+// ── 포니봇 BLE UUID (ble_library.py의 Nordic UART 서비스와 일치) ──
+const NUS_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const NUS_RX      = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';   // 쓰기(중앙→포니봇)
+
+const $ = id => document.getElementById(id);
+const setStatus = m => { $('status').textContent = m; };
+
+let rxChar = null;
+let listening = false;
+let lastCmd = '', lastAt = 0;
+
+// ── 1) Web Bluetooth 연결 ──
+$('btnConnect').onclick = async () => {
+  if(!navigator.bluetooth){ setStatus('이 브라우저는 Web Bluetooth 미지원 (Chrome/Edge 사용)'); return; }
+  try{
+    const device  = await navigator.bluetooth.requestDevice({
+      filters: [{ name: 'ESP-000' }], optionalServices: [NUS_SERVICE] });
+    setStatus('연결 중...');
+    const server  = await device.gatt.connect();
+    const service = await server.getPrimaryService(NUS_SERVICE);
+    rxChar = await service.getCharacteristic(NUS_RX);
+    device.addEventListener('gattserverdisconnected', () => {
+      rxChar = null; setStatus('⚠️ 포니봇 연결 끊김'); });
+    setStatus('✅ 포니봇(ESP-000) 연결됨! ② 듣기 시작을 누르세요.');
+  }catch(e){ setStatus('연결 실패: ' + e.message); }
+};
+
+// ── 2) 명령 전송 ──
+async function sendCommand(cmd){
+  $('cmd').textContent = '명령: ' + cmd;
+  if(!rxChar){ setStatus('먼저 ① 포니봇 연결을 눌러주세요.'); return; }
+  try{
+    const data = new TextEncoder().encode(cmd);
+    if(rxChar.writeValueWithoutResponse) await rxChar.writeValueWithoutResponse(data);
+    else await rxChar.writeValue(data);
+  }catch(e){ setStatus('전송 실패: ' + e.message); }
+}
+document.querySelectorAll('[data-cmd]').forEach(b => b.onclick = () => sendCommand(b.dataset.cmd));
+
+// ── 3) 텍스트 → 명령 매핑 ──
+function toCommand(text){
+  const t = text.toLowerCase();
+  if(t.includes('전진') || t.includes('앞으로') || t.includes('출발') || t.includes('forward') || t.includes('go')) return 'forward';
+  if(t.includes('후진') || t.includes('뒤로')   || t.includes('back'))   return 'backward';
+  if(t.includes('왼')   || t.includes('좌회전') || t.includes('left'))   return 'left';
+  if(t.includes('오른') || t.includes('우회전') || t.includes('right'))  return 'right';
+  if(t.includes('정지') || t.includes('멈')     || t.includes('스탑') || t.includes('스톱') || t.includes('stop')) return 'stop';
+  return null;
+}
+
+// ── 4) Web Speech API 음성 인식 ──
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+
+function setupRecognition(){
+  recognition = new SR();
+  recognition.lang = 'ko-KR';
+  recognition.continuous = true;       // 계속 듣기
+  recognition.interimResults = true;   // 중간 결과도 받아 빠르게 반응
+  recognition.maxAlternatives = 1;
+
+  recognition.onresult = (e) => {
+    let transcript = '';
+    for(let i = e.resultIndex; i < e.results.length; i++){
+      transcript += e.results[i][0].transcript;
+    }
+    transcript = transcript.trim();
+    if(transcript) $('text').textContent = transcript;
+
+    const cmd = toCommand(transcript);
+    const now = Date.now();
+    if(cmd && !(cmd === lastCmd && now - lastAt < 1200)){   // 같은 명령 연속 중복 방지
+      lastCmd = cmd; lastAt = now;
+      sendCommand(cmd);
+      setStatus('🎙️ 듣는 중... (최근 명령: ' + cmd + ')');
+    }
+  };
+
+  recognition.onerror = (e) => {
+    if(e.error === 'not-allowed' || e.error === 'service-not-allowed'){
+      setStatus('🎤 마이크 권한 거부됨. 주소창 자물쇠→사이트 권한에서 마이크 허용 후 다시 시도하세요.');
+      listening = false; updateBtn();
+    } else if(e.error === 'no-speech' || e.error === 'aborted'){
+      /* 무음/중단 — onend에서 자동 재시작 */
+    } else {
+      setStatus('인식 오류: ' + e.error);
+    }
+  };
+
+  // 연속 인식은 가끔 멈추므로, 듣는 중이면 자동 재시작
+  recognition.onend = () => {
+    if(listening) setTimeout(() => { try{ recognition.start(); }catch(_){} }, 200);
+  };
+}
+
+function updateBtn(){
+  if(listening){ $('btnTalk').classList.add('rec'); $('btnTalk').textContent = '■ 듣기 중지'; }
+  else         { $('btnTalk').classList.remove('rec'); $('btnTalk').textContent = '② 🎙️ 듣기 시작'; }
+}
+
+$('btnTalk').onclick = () => {
+  if(!SR){ setStatus('이 브라우저는 Web Speech API 미지원입니다. (Chrome/Edge 또는 안드로이드 Chrome 사용)'); return; }
+  if(!window.isSecureContext){ setStatus('🔒 HTTPS(보안 연결)에서만 동작합니다. https 주소로 열어주세요.'); return; }
+  if(listening){
+    listening = false; updateBtn();
+    try{ recognition.stop(); }catch(_){}
+    setStatus('듣기 중지됨. 다시 시작하려면 버튼을 누르세요.');
+    return;
+  }
+  if(!recognition) setupRecognition();
+  listening = true; updateBtn();
+  setStatus('🎙️ 듣는 중... 말하면 바로 명령이 전달됩니다.');
+  try{ recognition.start(); }catch(_){}
+};
+
+// 초기 상태
+if(!SR) setStatus('⚠️ 이 브라우저는 음성 인식(Web Speech API)을 지원하지 않습니다. Chrome/Edge를 사용하세요.');
+else    setStatus('준비 완료! ① 포니봇 연결 → ② 듣기 시작');
+</script>
+</body>
+</html>
