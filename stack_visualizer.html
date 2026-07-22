@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>배열 스택 실행 추적기 · stack.c</title>
+<style>
+  :root{
+    --page:#EAEDF2;--ink:#12151E;--ink2:#171B26;--ink3:#1F2432;
+    --hi:#EAECF2;--mid:#9AA3B2;--dim:#5C6473;--hair:rgba(255,255,255,.08);
+    --amber:#F5B94D;--green:#35D0A5;--red:#FF6B6B;--blue:#5AA9FF;
+    --amber-soft:rgba(245,185,77,.15);
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans KR",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{background:var(--page);color:var(--ink);font-family:var(--sans);
+    -webkit-font-smoothing:antialiased;padding:22px 18px 40px;min-height:100vh}
+  .app{max-width:1080px;margin:0 auto}
+
+  header.top{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:16px}
+  header.top h1{font-family:var(--mono);font-size:19px;font-weight:600;margin:0;letter-spacing:-.2px;color:var(--ink)}
+  header.top h1 .dot{color:var(--green)}
+  header.top p{margin:2px 0 0;font-size:13px;color:#5a6172;max-width:540px;line-height:1.5}
+  .kbd-hint{font-family:var(--mono);font-size:11.5px;color:#79808f}
+  .kbd-hint kbd{font-family:var(--mono);background:#fff;border:1px solid #cfd5df;border-bottom-width:2px;
+    border-radius:5px;padding:1px 5px;font-size:11px;color:#4a515f;margin:0 1px}
+
+  .grid{display:grid;grid-template-columns:1fr 0.92fr;gap:16px;align-items:stretch}
+  @media (max-width:860px){ .grid{grid-template-columns:1fr} }
+
+  .panel{background:var(--ink);border-radius:14px;overflow:hidden;
+    box-shadow:0 10px 30px -12px rgba(18,21,30,.5),0 1px 0 rgba(255,255,255,.4) inset;
+    border:1px solid #0c0e15;display:flex;flex-direction:column;min-height:440px}
+  .panel-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;
+    border-bottom:1px solid var(--hair);font-family:var(--mono);font-size:12.5px;color:var(--mid);
+    letter-spacing:.3px;background:linear-gradient(#191d29,#151925)}
+  .panel-head .file{color:#c7cdd9}
+  .panel-head .tag{color:var(--dim);font-size:11px}
+  .head-actions{display:flex;align-items:center;gap:8px}
+  .edit-status{font-family:var(--mono);font-size:11px;color:var(--green);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .edit-status.err{color:var(--red)}
+  .copybtn{font-family:var(--mono);font-size:11px;color:var(--mid);background:transparent;
+    border:1px solid var(--hair);border-radius:6px;padding:3px 9px;cursor:pointer;transition:.15s}
+  .copybtn:hover{color:var(--hi);border-color:rgba(255,255,255,.25)}
+  .copybtn.active{color:var(--amber);border-color:rgba(245,185,77,.45);background:rgba(245,185,77,.08)}
+
+  /* CODE PANEL */
+  .code-scroll{overflow:auto;padding:8px 0 12px;flex:1;position:relative}
+  pre.code{margin:0;font-family:var(--mono);font-size:13px;line-height:1.62}
+  .cl{display:flex;padding:0 14px 0 0;white-space:pre;transition:background .18s}
+  .cl .ln{width:42px;flex:0 0 42px;text-align:right;padding-right:12px;color:#414a5c;user-select:none;
+    border-right:1px solid rgba(255,255,255,.05);margin-right:12px}
+  .cl .src{color:#cdd3df}
+  .cl.active{background:var(--amber-soft);box-shadow:inset 3px 0 0 var(--amber)}
+  .cl.active .ln{color:var(--amber)}
+  .c-kw{color:#C792EA}.c-num{color:#F78C6C}.c-str{color:#C3E88D}.c-com{color:#5a6377;font-style:italic}.c-pre{color:#89DDFF}
+
+  .code-input{display:none;position:absolute;inset:0;width:100%;height:100%;box-sizing:border-box;
+    resize:none;border:0;outline:none;background:#0f121a;color:#cdd3df;caret-color:var(--amber);
+    font-family:var(--mono);font-size:13px;line-height:1.62;padding:8px 14px;white-space:pre;overflow:auto;tab-size:4}
+  .code-scroll.editing .code{display:none}
+  .code-scroll.editing .code-input{display:block}
+
+  /* VIZ PANEL */
+  .viz-body{flex:1;display:flex;flex-direction:column;padding:16px 16px 14px;
+    background:radial-gradient(circle at 1px 1px, rgba(255,255,255,.045) 1px, transparent 0) 0 0/22px 22px,var(--ink)}
+  .stack-wrap{display:flex;justify-content:center;padding:6px 0 4px}
+  .stack-area{position:relative;height:384px;width:330px}
+  .row{position:absolute;left:0;height:52px;display:flex;align-items:center;gap:12px;width:242px}
+  .row .addr{font-family:var(--mono);font-size:11px;color:#4b5468;width:62px;text-align:right;letter-spacing:.2px;flex:0 0 62px}
+  .row .box{position:relative;flex:1;height:48px;border-radius:9px;border:1.5px dashed rgba(255,255,255,.12);
+    display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.015);
+    transition:border-color .25s,background .25s,box-shadow .25s}
+  .row .box .idx{position:absolute;left:9px;top:6px;font-family:var(--mono);font-size:10.5px;color:#454e60}
+  .row .box .val{font-family:var(--mono);font-size:20px;font-weight:600;color:var(--hi);opacity:0;transition:opacity .12s}
+  .row.filled .box{border-style:solid;border-color:rgba(53,208,165,.55);
+    background:linear-gradient(180deg,rgba(53,208,165,.14),rgba(53,208,165,.05));
+    box-shadow:0 0 0 1px rgba(53,208,165,.15),0 6px 16px -10px rgba(53,208,165,.6)}
+  .row.filled .box .val{opacity:1}
+  .row.istop .box{border-color:var(--amber);
+    box-shadow:0 0 0 1px rgba(245,185,77,.35),0 8px 20px -8px rgba(245,185,77,.55);
+    background:linear-gradient(180deg,rgba(245,185,77,.16),rgba(245,185,77,.05))}
+  .row .box.flash-green{animation:flashGreen .55s ease}
+  .row .box.flash-red{animation:flashRed .55s ease}
+  .row .box.flash-blue{animation:flashBlue .55s ease}
+  .row .box.flash-amber{animation:flashAmber .55s ease}
+  .row.pushing .box .val{animation:popIn .42s cubic-bezier(.2,1.3,.4,1)}
+  @keyframes popIn{from{transform:translateY(-15px) scale(.8);opacity:0}60%{transform:translateY(3px) scale(1.06);opacity:1}to{transform:none;opacity:1}}
+  @keyframes flashGreen{0%{box-shadow:0 0 0 0 rgba(53,208,165,.7)}100%{box-shadow:0 0 0 14px rgba(53,208,165,0)}}
+  @keyframes flashRed{0%{box-shadow:0 0 0 0 rgba(255,107,107,.7)}100%{box-shadow:0 0 0 14px rgba(255,107,107,0)}}
+  @keyframes flashBlue{0%{box-shadow:0 0 0 0 rgba(90,169,255,.7)}100%{box-shadow:0 0 0 14px rgba(90,169,255,0)}}
+  @keyframes flashAmber{0%{box-shadow:0 0 0 0 rgba(245,185,77,.7)}100%{box-shadow:0 0 0 14px rgba(245,185,77,0)}}
+
+  .ptr{position:absolute;left:252px;height:48px;display:flex;align-items:center;gap:6px;
+    transition:bottom .4s cubic-bezier(.34,1.2,.4,1),opacity .3s;pointer-events:none}
+  .ptr .arw{color:var(--amber);font-size:15px;line-height:1;filter:drop-shadow(0 0 4px rgba(245,185,77,.6))}
+  .ptr .lab{font-family:var(--mono);font-size:12px;color:var(--amber);font-weight:600;white-space:nowrap;
+    background:rgba(245,185,77,.12);border:1px solid rgba(245,185,77,.35);border-radius:6px;padding:2px 7px}
+  .ptr.empty .arw{color:var(--red);filter:drop-shadow(0 0 4px rgba(255,107,107,.6))}
+  .ptr.empty .lab{color:var(--red);background:rgba(255,107,107,.12);border-color:rgba(255,107,107,.4)}
+
+  .phantom{position:absolute;left:0;bottom:6px;height:52px;width:242px;display:flex;align-items:center;gap:12px;transition:opacity .3s}
+  .phantom .addr{font-family:var(--mono);font-size:11px;color:#7a5560;width:62px;text-align:right;flex:0 0 62px;text-decoration:line-through;opacity:.65}
+  .phantom .box{position:relative;flex:1;height:48px;border-radius:9px;transition:.3s;
+    border:1.5px dashed rgba(255,107,107,.35);background:rgba(255,107,107,.045);
+    display:flex;align-items:center;justify-content:center}
+  .phantom .box .idx{position:absolute;left:9px;top:6px;font-family:var(--mono);font-size:10.5px;color:#9a5a5a}
+  .phantom .box .ptxt{font-family:var(--mono);font-size:11.5px;color:#9c6a6a;letter-spacing:.2px}
+  .phantom.on .box{border-color:rgba(255,107,107,.7);background:rgba(255,107,107,.13);
+    box-shadow:0 0 0 1px rgba(255,107,107,.25),0 6px 16px -10px rgba(255,107,107,.5)}
+  .phantom.on .box .idx,.phantom.on .box .ptxt{color:#ff9b9b}
+  .phantom.off{opacity:.32}
+  .arr-floor{position:absolute;left:74px;width:168px;bottom:66px;height:0;pointer-events:none;
+    border-top:1px dashed rgba(255,255,255,.22);text-align:center}
+  .arr-floor span{position:relative;top:-8px;font-family:var(--mono);font-size:9.5px;color:#727a8a;background:var(--ink);padding:0 7px;letter-spacing:.3px}
+
+  .chip{position:absolute;left:74px;width:230px;text-align:center;pointer-events:none;z-index:5;font-family:var(--mono);font-size:15px;font-weight:700}
+  .chip.push{color:var(--green);animation:chipDrop .5s ease forwards}
+  .chip.pop{color:var(--red);animation:chipRise .55s ease forwards}
+  @keyframes chipDrop{from{transform:translateY(-40px);opacity:0}35%{opacity:1}to{transform:translateY(0);opacity:0}}
+  @keyframes chipRise{from{transform:translateY(0);opacity:1}to{transform:translateY(-46px);opacity:0}}
+
+  .readout{display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap;border-top:1px solid var(--hair);padding-top:12px}
+  .badge{font-family:var(--mono);font-size:11.5px;font-weight:700;letter-spacing:.6px;padding:4px 9px;border-radius:6px;border:1px solid transparent}
+  .badge.push{color:var(--green);background:rgba(53,208,165,.12);border-color:rgba(53,208,165,.4)}
+  .badge.pop{color:var(--red);background:rgba(255,107,107,.12);border-color:rgba(255,107,107,.4)}
+  .badge.peek,.badge.read{color:var(--blue);background:rgba(90,169,255,.12);border-color:rgba(90,169,255,.4)}
+  .badge.call,.badge.return,.badge.check,.badge.run{color:var(--mid);background:rgba(255,255,255,.05);border-color:var(--hair)}
+  .topvar{font-family:var(--mono);font-size:13px;color:#c7cdd9}
+  .topvar b{color:var(--amber);font-weight:700}
+  .desc{margin-top:11px;font-size:13.5px;line-height:1.55;color:#d3d8e2;min-height:42px;font-family:var(--sans)}
+  .log{margin-top:auto;padding-top:12px}
+  .log-title{font-family:var(--mono);font-size:10.5px;color:var(--dim);letter-spacing:1px;margin-bottom:5px}
+  .log-box{font-family:var(--mono);font-size:12px;line-height:1.65;color:#8b93a3;background:rgba(0,0,0,.22);
+    border:1px solid var(--hair);border-radius:8px;padding:8px 11px;min-height:56px;max-height:92px;overflow:auto;white-space:pre}
+  .log-box .lg-push{color:var(--green)}.log-box .lg-pop{color:var(--red)}.log-box .lg-peek{color:var(--blue)}
+
+  .controls{margin-top:16px;background:var(--ink);border-radius:12px;border:1px solid #0c0e15;padding:12px 16px;
+    display:flex;align-items:center;gap:12px;flex-wrap:wrap;box-shadow:0 8px 24px -14px rgba(18,21,30,.5)}
+  .btn{font-family:var(--mono);font-size:13px;color:var(--hi);background:var(--ink3);border:1px solid var(--hair);
+    border-radius:9px;padding:8px 13px;cursor:pointer;transition:.15s;display:inline-flex;align-items:center;gap:6px}
+  .btn:hover:not(:disabled){background:#2a3140;border-color:rgba(255,255,255,.22)}
+  .btn:active:not(:disabled){transform:translateY(1px)}
+  .btn:disabled{opacity:.35;cursor:default}
+  .btn.play{background:var(--green);color:#06231b;border-color:transparent;font-weight:700}
+  .btn.play.on{background:var(--amber);color:#2a1f04}
+  .btn.reset{color:var(--mid)}
+  .spacer{flex:1}
+  .counter{font-family:var(--mono);font-size:12.5px;color:var(--mid)}
+  .counter b{color:var(--hi)}
+  .scrub{flex:1 1 180px;min-width:150px}
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:5px;border-radius:4px;
+    background:linear-gradient(90deg,var(--amber) var(--p,0%),#2b3140 var(--p,0%));outline:none;cursor:pointer}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:15px;height:15px;border-radius:50%;background:#fff;border:3px solid var(--amber);cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+  input[type=range]::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:#fff;border:3px solid var(--amber);cursor:pointer}
+
+  footer.note{margin-top:14px;font-size:12px;color:#7a818f;line-height:1.6;text-align:center;font-family:var(--sans)}
+  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--ink);color:var(--hi);
+    font-family:var(--mono);font-size:12.5px;padding:9px 15px;border-radius:9px;opacity:0;transition:.25s;pointer-events:none;border:1px solid var(--hair)}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div>
+      <h1><span class="dot">●</span> stack.c — 배열 기반 스택 시각화</h1>
+      <p>왼쪽 코드를 <b>직접 편집</b>할 수 있습니다. main()의 push/pop/peek 순서나 <code>#define MAX</code> 값을 바꾸면 오른쪽 스택 애니메이션이 다시 계산되어 반영됩니다.</p>
+    </div>
+    <div class="kbd-hint">이동 <kbd>&larr;</kbd><kbd>&rarr;</kbd> · 재생 <kbd>Space</kbd></div>
+  </header>
+
+  <div class="grid">
+    <!-- CODE -->
+    <section class="panel">
+      <div class="panel-head">
+        <span class="file">stack.c</span>
+        <div class="head-actions">
+          <span class="edit-status" id="editStatus"></span>
+          <button class="copybtn" id="editBtn">&#9998; 편집</button>
+          <button class="copybtn" id="copyBtn">복사</button>
+        </div>
+      </div>
+      <div class="code-scroll" id="codeScroll">
+        <pre class="code" id="codePre"></pre>
+        <textarea class="code-input" id="codeInput" spellcheck="false"></textarea>
+      </div>
+    </section>
+
+    <!-- VIZ -->
+    <section class="panel">
+      <div class="panel-head">
+        <span class="file">메모리 · int stack[<span id="capLabel">5</span>]</span>
+        <span class="tag">index 0 = 바닥</span>
+      </div>
+      <div class="viz-body">
+        <div class="stack-wrap"><div class="stack-area" id="stackArea"></div></div>
+        <div class="readout">
+          <span class="badge run" id="badge">실행</span>
+          <span class="topvar">top = <b id="topVal">-1</b></span>
+        </div>
+        <div class="desc" id="descBox">시작하려면 <b>다음 &#9654;</b> 또는 <b>재생</b>을 누르세요.</div>
+        <div class="log">
+          <div class="log-title">연산 로그</div>
+          <div class="log-box" id="logBox"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="controls">
+    <button class="btn reset" id="resetBtn">&#8635; 처음</button>
+    <button class="btn" id="prevBtn">&#9664; 이전</button>
+    <button class="btn play" id="playBtn">&#9654; 재생</button>
+    <button class="btn" id="nextBtn">다음 &#9654;</button>
+    <div class="scrub"><input type="range" id="scrub" min="0" value="0"></div>
+    <span class="counter">단계 <b id="curNo">0</b> / <span id="maxNo">0</span></span>
+  </div>
+
+  <footer class="note">
+    push는 <span style="color:#2a9d7f">초록</span>으로 값이 들어오고, pop은 <span style="color:#d95b5b">빨강</span>으로 빠져나갑니다.
+    예) main에서 push를 MAX보다 많이 넣으면 <b>Overflow</b>, 빈 스택에 pop하면 <b>Underflow</b>가 재현됩니다. (MAX 표시 범위: 1~8)
+  </footer>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+/* ============ 기본 C 소스 ============ */
+const CODE = [
+  '#include <stdio.h>',
+  '#define MAX 5',
+  '',
+  'int stack[MAX];       // 배열 스택',
+  'int top = -1;         // 스택 포인터(맨 위 인덱스)',
+  '',
+  'int isFull() {',
+  '    return top == MAX - 1;',
+  '}',
+  '',
+  'int isEmpty() {',
+  '    return top == -1;',
+  '}',
+  '',
+  'void push(int value) {',
+  '    if (isFull()) {',
+  '        printf("Overflow\\n");',
+  '        return;',
+  '    }',
+  '    top++;',
+  '    stack[top] = value;',
+  '}',
+  '',
+  'int pop() {',
+  '    if (isEmpty()) {',
+  '        printf("Underflow\\n");',
+  '        return -1;',
+  '    }',
+  '    int value = stack[top];',
+  '    top--;',
+  '    return value;',
+  '}',
+  '',
+  'int peek() {',
+  '    if (isEmpty()) return -1;',
+  '    return stack[top];',
+  '}',
+  '',
+  'int main() {',
+  '    push(10);',
+  '    push(20);',
+  '    push(30);',
+  '    int x = pop();',
+  '    push(40);',
+  '    int t = peek();',
+  '    return 0;',
+  '}',
+].join('\n');
+
+/* ============ 신택스 하이라이트 ============ */
+function hl(line){
+  let s=line.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  s=s.replace(/(\/\/.*)$/,'<span class="c-com">$1</span>');
+  s=s.replace(/("(?:[^"\\]|\\.)*")/g,'<span class="c-str">$1</span>');
+  s=s.replace(/^(\s*#\w+)/,'<span class="c-pre">$1</span>');
+  s=s.replace(/\b(int|void|char|return|if|else|for|while)\b/g,'<span class="c-kw">$1</span>');
+  s=s.replace(/(?<![\w>])(\d+)\b/g,'<span class="c-num">$1</span>');
+  return s;
+}
+
+/* ============ C 소스 파서 (main의 연산 + MAX + 함수 라인 위치) ============ */
+function parseProgram(src){
+  const rawLines=src.replace(/\r\n/g,'\n').split('\n');
+  const N=rawLines.length;
+  const code=rawLines.map(l=>l.replace(/\/\/.*$/,''));   // 주석 제거본(파싱용)
+
+  // MAX
+  let MAXraw=5;
+  for(const l of code){ const m=l.match(/#define\s+MAX\s+(-?\d+)/); if(m){MAXraw=parseInt(m[1],10);break;} }
+  let MAXv=MAXraw; if(!(MAXv>=1)) MAXv=5;
+  MAXv=Math.max(1,Math.min(8,MAXv));
+
+  // 함수 범위 찾기
+  const funcs={};
+  const nameRe=/\b(push|pop|peek|isFull|isEmpty|main)\s*\([^;]*\)\s*\{/;
+  for(let i=0;i<N;i++){
+    const m=code[i].match(nameRe);
+    if(m && !funcs[m[1]]){
+      let depth=0,started=false,endLine=i;
+      for(let j=i;j<N;j++){
+        for(const ch of code[j]){ if(ch==='{'){depth++;started=true;} else if(ch==='}'){depth--;} }
+        if(started&&depth===0){ endLine=j; break; }
+      }
+      funcs[m[1]]={start:i,end:endLine};
+    }
+  }
+  function lineIn(fn,re){ const f=funcs[fn]; if(!f) return null;
+    for(let i=f.start;i<=f.end;i++){ if(re.test(code[i])) return i+1; } return null; }
+
+  const L={
+    push:funcs.push?funcs.push.start+1:null,
+    pushFull:lineIn('push',/if\s*\(\s*isFull/),
+    pushOver:lineIn('push',/printf/),
+    pushInc:lineIn('push',/top\s*\+\+/),
+    pushStore:lineIn('push',/stack\s*\[\s*top\s*\]\s*=/),
+    pop:funcs.pop?funcs.pop.start+1:null,
+    popEmpty:lineIn('pop',/if\s*\(\s*isEmpty/),
+    popUnder:lineIn('pop',/printf/),
+    popRead:lineIn('pop',/=\s*stack\s*\[\s*top\s*\]/),
+    popDec:lineIn('pop',/top\s*--/),
+    popRet:lineIn('pop',/return\s+\w/),
+    peek:funcs.peek?funcs.peek.start+1:null,
+    peekEmpty:lineIn('peek',/isEmpty/),
+    peekRet:lineIn('peek',/return\s+stack/),
+    main:funcs.main?funcs.main.start+1:null,
+    mainRet:lineIn('main',/return/),
+  };
+
+  // main 연산 파싱
+  const ops=[];
+  if(funcs.main){
+    const opRe=/\bpush\s*\(\s*(-?\d+)\s*\)|(?:(\w+)\s*=\s*)?\b(pop|peek)\s*\(\s*\)/g;
+    for(let i=funcs.main.start+1;i<funcs.main.end;i++){
+      const line=code[i], ln=i+1; let m;
+      opRe.lastIndex=0;
+      while((m=opRe.exec(line))){
+        if(m[1]!==undefined){ ops.push({type:'push',val:parseInt(m[1],10),ln}); }
+        else { ops.push({type:m[3],ln,assign:m[2]||null}); }
+      }
+    }
+  }
+  return {MAXv,MAXraw,L,ops,funcs,error:funcs.main?null:'main() 함수를 찾을 수 없습니다.'};
+}
+
+/* ============ 실행 추적 생성 (스택 semantics) ============ */
+function buildTrace(src){
+  const P=parseProgram(src);
+  if(P.error) return {error:P.error};
+  const MAXv=P.MAXv, L=P.L, steps=[];
+  let mem=new Array(MAXv).fill(null), top=-1;
+  function snap(line,desc,extra){ steps.push(Object.assign({line:Array.isArray(line)?line:[line],desc,top,mem:mem.slice()},extra||{})); }
+
+  snap(L.main||1,"main() 시작 — 스택은 비어 있습니다. top = -1 은 배열의 첫 원소 index 0 이 아니라 그 <b>이전(배열 밖)</b>을 가리킵니다.");
+
+  for(const op of P.ops){
+    if(op.type==='push'){
+      snap(op.ln, "push("+op.val+") 호출.", {op:'call'});
+      snap(L.push||op.ln, "push 함수 진입: value = "+op.val);
+      const full=(top===MAXv-1);
+      snap(L.pushFull||op.ln, "isFull() 검사: top("+top+") == MAX-1("+(MAXv-1)+")? → "+(full?'참':'거짓')+".", {op:'check'});
+      if(full){
+        snap(L.pushOver||op.ln, "스택이 가득 참! \"Overflow\" 출력 후 값을 넣지 않고 반환합니다.", {op:'over', val:op.val});
+        snap(op.ln, "push 종료 → main 으로 복귀. ("+op.val+"은 저장되지 않음)", {op:'return'});
+      }else{
+        top++; snap(L.pushInc||op.ln, "top++ : "+(top-1)+" → "+top);
+        mem[top]=op.val; snap(L.pushStore||op.ln, "stack["+top+"] = "+op.val+" : 배열 "+top+"번 칸에 저장.", {op:'push', idx:top});
+        snap(op.ln, "push 종료 → main 으로 복귀.", {op:'return'});
+      }
+    } else if(op.type==='pop'){
+      const label=op.assign?("int "+op.assign+" = pop()"):"pop()";
+      snap(op.ln, label+" — 맨 위 값을 꺼냅니다.", {op:'call'});
+      snap(L.pop||op.ln, "pop 함수 진입.");
+      const empty=(top===-1);
+      snap(L.popEmpty||op.ln, "isEmpty() 검사: top("+top+") == -1? → "+(empty?'참':'거짓')+".", {op:'check'});
+      if(empty){
+        snap(L.popUnder||op.ln, "스택이 비어 있음! \"Underflow\" 출력 후 -1 을 반환합니다.", {op:'under'});
+        snap(op.ln, "pop 종료 → main 으로 복귀."+(op.assign?(" "+op.assign+" = -1"):""), {op:'return', res:op.assign?(op.assign+" = -1"):null});
+      }else{
+        const v=mem[top];
+        snap(L.popRead||op.ln, "int value = stack[top] → stack["+top+"] = "+v+". 반환할 값을 읽습니다.", {op:'read', idx:top});
+        const oldTop=top; top--;
+        snap(L.popDec||op.ln, "top-- : "+oldTop+" → "+top+". 값 "+v+" 이(가) 스택에서 제거됩니다.", {op:'pop', idx:oldTop, pv:v});
+        snap(L.popRet||op.ln, "return value → "+v+" 반환."+(op.assign?(" main 에서 "+op.assign+" = "+v+"."):""), {op:'return', res:op.assign?(op.assign+" = "+v):null});
+      }
+    } else if(op.type==='peek'){
+      const label=op.assign?("int "+op.assign+" = peek()"):"peek()";
+      snap(op.ln, label+" — 맨 위 값을 확인만 합니다(제거 X).", {op:'call'});
+      snap(L.peek||op.ln, "peek 함수 진입.");
+      const empty=(top===-1);
+      snap(L.peekEmpty||op.ln, "isEmpty()? → "+(empty?'참':'거짓')+".", {op:'check'});
+      if(empty){
+        snap(L.peekRet||op.ln, "스택이 비어 -1 을 반환합니다."+(op.assign?(" "+op.assign+" = -1"):""), {op:'return', res:op.assign?(op.assign+" = -1"):null});
+      }else{
+        const v=mem[top];
+        snap(L.peekRet||op.ln, "return stack[top] → stack["+top+"] = "+v+" 반환. 스택은 그대로."+(op.assign?(" "+op.assign+" = "+v+"."):""), {op:'peek', idx:top, res:op.assign?(op.assign+" = "+v):null});
+      }
+    }
+  }
+  const finalArr=mem.slice(0,top+1);
+  snap(L.mainRet||L.main||1, "프로그램 종료. 최종 스택 = ["+finalArr.join(', ')+"], top = "+top+".");
+  return {steps, MAXv, MAXraw:P.MAXraw};
+}
+
+/* ============ DOM refs ============ */
+const codePre=document.getElementById('codePre');
+const codeInput=document.getElementById('codeInput');
+const codeScroll=document.getElementById('codeScroll');
+const stackArea=document.getElementById('stackArea');
+const capLabel=document.getElementById('capLabel');
+const codeScrollEl=codeScroll;
+const badge=document.getElementById('badge');
+const topValEl=document.getElementById('topVal');
+const descBox=document.getElementById('descBox');
+const logBox=document.getElementById('logBox');
+const curNo=document.getElementById('curNo');
+const maxNo=document.getElementById('maxNo');
+const scrub=document.getElementById('scrub');
+const prevBtn=document.getElementById('prevBtn');
+const nextBtn=document.getElementById('nextBtn');
+const playBtn=document.getElementById('playBtn');
+const resetBtn=document.getElementById('resetBtn');
+const editBtn=document.getElementById('editBtn');
+const copyBtn=document.getElementById('copyBtn');
+const editStatus=document.getElementById('editStatus');
+const toast=document.getElementById('toast');
+
+/* ============ 상태 ============ */
+const BASE=76;
+let SRC=CODE, steps=[], curCap=0, rows=[], phantom=null, ptr=null;
+let cur=0, playing=false, timer=null;
+const reduce=(window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches)||false;
+const badgeText={push:'PUSH',pop:'POP',peek:'PEEK',read:'READ',call:'CALL',return:'RET',check:'CHECK',over:'FULL',under:'EMPTY'};
+
+/* ============ 코드 하이라이트 렌더 ============ */
+function renderCodePre(source){
+  const lines=source.replace(/\r\n/g,'\n').split('\n');
+  codePre.innerHTML='';
+  lines.forEach((line,i)=>{
+    const div=document.createElement('div');
+    div.className='cl'; div.dataset.n=i+1;
+    div.innerHTML='<span class="ln">'+(i+1)+'</span><span class="src">'+(hl(line)||'&nbsp;')+'</span>';
+    codePre.appendChild(div);
+  });
+}
+
+/* ============ 스택 DOM (MAX에 맞춰 재구성) ============ */
+function buildStackDOM(cap){
+  stackArea.innerHTML='';
+  rows=[];
+  for(let i=0;i<cap;i++){
+    const row=document.createElement('div');
+    row.className='row'; row.style.bottom=(BASE+i*62)+'px';
+    const addr='0x'+(0x1000+i*4).toString(16).toUpperCase();
+    row.innerHTML='<div class="addr">'+addr+'</div>'+
+      '<div class="box"><span class="idx">['+i+']</span><span class="val"></span></div>';
+    stackArea.appendChild(row); rows.push(row);
+  }
+  const floor=document.createElement('div');
+  floor.className='arr-floor'; floor.innerHTML='<span>↑ 배열 시작 · index 0</span>';
+  stackArea.appendChild(floor);
+  phantom=document.createElement('div');
+  phantom.className='phantom';
+  phantom.innerHTML='<div class="addr">0x0FFC</div><div class="box"><span class="idx">[-1]</span><span class="ptxt">배열 밖 · 원소 없음</span></div>';
+  stackArea.appendChild(phantom);
+  ptr=document.createElement('div');
+  ptr.className='ptr'; ptr.innerHTML='<span class="arw">◄</span><span class="lab">top</span>';
+  stackArea.appendChild(ptr);
+  stackArea.style.height=(BASE+(cap-1)*62+56)+'px';
+  capLabel.textContent=cap;
+}
+
+/* ============ 로그 ============ */
+function buildLog(upto){
+  let out='';
+  for(let k=0;k<=upto;k++){
+    const s=steps[k];
+    if(s.op==='push') out+='<span class="lg-push">push('+s.mem[s.idx]+')  →  stack['+s.idx+'] = '+s.mem[s.idx]+'</span>\n';
+    else if(s.op==='pop') out+='<span class="lg-pop">pop()   →  '+s.pv+' 반환 · 제거</span>\n';
+    else if(s.op==='peek') out+='<span class="lg-peek">peek()  →  '+s.mem[s.idx]+' 확인(유지)</span>\n';
+    else if(s.op==='over') out+='<span class="lg-pop">push('+s.val+')  →  Overflow (저장 안 됨)</span>\n';
+    else if(s.op==='under') out+='<span class="lg-pop">pop()   →  Underflow (-1 반환)</span>\n';
+  }
+  logBox.innerHTML=out; logBox.scrollTop=logBox.scrollHeight;
+}
+
+/* ============ 렌더 ============ */
+function render(i, animate){
+  const prev=cur; cur=i;
+  const s=steps[i];
+
+  document.querySelectorAll('.cl.active').forEach(e=>e.classList.remove('active'));
+  let firstActive=null;
+  s.line.forEach(n=>{ const el=codePre.querySelector('.cl[data-n="'+n+'"]');
+    if(el){el.classList.add('active'); if(!firstActive)firstActive=el;} });
+  if(firstActive && !codeScroll.classList.contains('editing')){
+    const target=firstActive.offsetTop - codeScroll.clientHeight/2 + 20;
+    codeScroll.scrollTo({top:Math.max(0,target),behavior:reduce?'auto':'smooth'});
+  }
+
+  const cap=rows.length;
+  for(let k=0;k<cap;k++){
+    const filled=k<=s.top, isTop=k===s.top;
+    rows[k].classList.toggle('filled',filled);
+    rows[k].classList.toggle('istop',isTop);
+    rows[k].querySelector('.val').textContent = filled ? s.mem[k] : '';
+  }
+
+  if(s.top<0){
+    ptr.classList.add('empty'); ptr.style.bottom='8px'; ptr.style.opacity='1';
+    ptr.querySelector('.lab').textContent='top = -1';
+    phantom.classList.add('on'); phantom.classList.remove('off');
+  }else{
+    ptr.classList.remove('empty'); ptr.style.bottom=(BASE+s.top*62+2)+'px'; ptr.style.opacity='1';
+    ptr.querySelector('.lab').textContent='top = '+s.top;
+    phantom.classList.remove('on'); phantom.classList.add('off');
+  }
+
+  const op=s.op||'run';
+  badge.className='badge '+((op==='over'||op==='under')?'pop':op);
+  badge.textContent=badgeText[op]||'실행';
+  topValEl.textContent=s.top;
+  descBox.innerHTML=s.desc;
+  buildLog(i);
+
+  curNo.textContent=i; scrub.value=i;
+  scrub.style.setProperty('--p',(steps.length>1?(i/(steps.length-1)*100):0)+'%');
+  prevBtn.disabled=(i===0); nextBtn.disabled=(i===steps.length-1);
+
+  if(animate && !reduce && i===prev+1) animateOp(s);
+}
+
+function animateOp(s){
+  if(s.idx==null) return;
+  const box=rows[s.idx] && rows[s.idx].querySelector('.box');
+  if(!box) return;
+  if(s.op==='push'){
+    const row=rows[s.idx];
+    row.classList.add('pushing');
+    box.classList.remove('flash-green'); void box.offsetWidth; box.classList.add('flash-green');
+    setTimeout(()=>row.classList.remove('pushing'),460);
+    floatChip('+'+s.mem[s.idx],'push',s.idx);
+  }else if(s.op==='pop'){
+    box.classList.remove('flash-red'); void box.offsetWidth; box.classList.add('flash-red');
+    floatChip('−'+s.pv,'pop',s.idx);
+  }else if(s.op==='read'){
+    box.classList.remove('flash-blue'); void box.offsetWidth; box.classList.add('flash-blue');
+  }else if(s.op==='peek'){
+    box.classList.remove('flash-amber'); void box.offsetWidth; box.classList.add('flash-amber');
+  }
+}
+function floatChip(text,type,idx){
+  const c=document.createElement('div');
+  c.className='chip '+type; c.textContent=text; c.style.bottom=(BASE+idx*62+14)+'px';
+  stackArea.appendChild(c);
+  c.addEventListener('animationend',()=>c.remove());
+  setTimeout(()=>c.remove(),700);
+}
+
+/* ============ 소스 적용 ============ */
+function setStatus(msg,isErr){ editStatus.textContent=msg; editStatus.classList.toggle('err',!!isErr); }
+function applySource(source, silent){
+  const res=buildTrace(source);
+  if(res.error){ setStatus('오류: '+res.error, true); return false; }
+  SRC=source; steps=res.steps;
+  if(res.MAXv!==curCap){ buildStackDOM(res.MAXv); curCap=res.MAXv; }
+  renderCodePre(source);
+  cur=0; scrub.max=steps.length-1; scrub.value=0; maxNo.textContent=steps.length-1;
+  stopPlay(); render(0,false);
+  if(!silent){
+    if(res.MAXraw!==res.MAXv) setStatus('반영됨 · MAX '+res.MAXraw+'→'+res.MAXv+'(표시제한)', false);
+    else setStatus('반영됨 ✓', false);
+  }
+  return true;
+}
+
+/* ============ 컨트롤 ============ */
+function goNext(){ if(cur<steps.length-1) render(cur+1,true); else stopPlay(); }
+function goPrev(){ if(cur>0) render(cur-1,false); }
+function stopPlay(){ playing=false; clearInterval(timer); playBtn.innerHTML='&#9654; 재생'; playBtn.classList.remove('on'); }
+function startPlay(){
+  if(cur>=steps.length-1) render(0,false);
+  playing=true; playBtn.textContent='❚❚ 일시정지'; playBtn.classList.add('on');
+  timer=setInterval(()=>{ if(cur>=steps.length-1){stopPlay();return;} render(cur+1,true); },1150);
+}
+nextBtn.onclick=()=>{stopPlay();goNext();};
+prevBtn.onclick=()=>{stopPlay();goPrev();};
+resetBtn.onclick=()=>{stopPlay();render(0,false);};
+playBtn.onclick=()=>{ playing?stopPlay():startPlay(); };
+scrub.oninput=()=>{ stopPlay(); render(parseInt(scrub.value,10),false); };
+
+document.addEventListener('keydown',e=>{
+  if(codeScroll.classList.contains('editing')) return;
+  if(e.key==='ArrowRight'){e.preventDefault();stopPlay();goNext();}
+  else if(e.key==='ArrowLeft'){e.preventDefault();stopPlay();goPrev();}
+  else if(e.key===' '){e.preventDefault();playing?stopPlay():startPlay();}
+});
+
+/* ============ 편집 ============ */
+let debTimer=null;
+editBtn.onclick=()=>{
+  const editing=codeScroll.classList.toggle('editing');
+  if(editing){
+    codeInput.value=SRC; editBtn.innerHTML='&#10003; 완료'; editBtn.classList.add('active');
+    stopPlay(); setStatus('편집 중 — 값을 바꾸면 오른쪽에 바로 반영됩니다', false);
+    setTimeout(()=>codeInput.focus(),0);
+  }else{
+    const ok=applySource(codeInput.value,false);
+    if(!ok){ // 파싱 실패 시 편집 모드 유지
+      codeScroll.classList.add('editing'); editBtn.innerHTML='&#10003; 완료'; editBtn.classList.add('active'); return;
+    }
+    editBtn.innerHTML='&#9998; 편집'; editBtn.classList.remove('active');
+  }
+};
+codeInput.addEventListener('input',()=>{
+  clearTimeout(debTimer);
+  debTimer=setTimeout(()=>{ applySource(codeInput.value,false); },350);
+});
+// Tab 키로 들여쓰기
+codeInput.addEventListener('keydown',e=>{
+  if(e.key==='Tab'){ e.preventDefault();
+    const s=codeInput.selectionStart, en=codeInput.selectionEnd;
+    codeInput.value=codeInput.value.slice(0,s)+'    '+codeInput.value.slice(en);
+    codeInput.selectionStart=codeInput.selectionEnd=s+4;
+  }
+});
+
+copyBtn.onclick=()=>{
+  navigator.clipboard.writeText(SRC).then(()=>{
+    toast.textContent='C 코드가 복사되었습니다 ✓';
+    toast.classList.add('show'); setTimeout(()=>toast.classList.remove('show'),1600);
+  }).catch(()=>{});
+};
+
+/* ============ 초기화 ============ */
+applySource(SRC, true);
+})();
+</script>
+</body>
+</html>
